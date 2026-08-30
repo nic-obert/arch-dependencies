@@ -1,0 +1,7 @@
+[package]
+name = "dependency-graph"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alpm = "5.0.2"
