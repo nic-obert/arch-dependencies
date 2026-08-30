@@ -36,3 +36,5 @@ Alpm stores dependencies with an associated name hash (u64)
 TODO: Consider using specialized integer hash functions for improved hash speeds. Benchmarks needed
 
 Potential limitation: if both packages A and B provide a virtual package C and a package D depends on C, then D may be listed as depending on both A and B instead of depending on only one of them. In some cases, it's best to leave it be. For instance, both vulkan-intel and nvidia-utils provide a vulkan-driver virtual package. We don't want to remove one of them because different graphics processors on the same system may use different drivers.
+
+TODO: Consider parallelizing some work with rayon

@@ -1,6 +1,8 @@
+#![feature(gen_blocks)]
+
 use std::{collections::{HashMap, hash_map::Entry}, fs, io::{self, Write}, path::Path};
 
-use alpm::{Alpm, Package};
+use alpm::{Alpm, AlpmList, Package};
 
 
 const FS_ROOT: &str = "/";
@@ -72,6 +74,16 @@ impl ProviderList {
         }));
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &PackageIndex> {
+        gen {
+            let mut current = Some(&self.head);
+            while let Some(node) = current {
+                yield &node.pkg;
+                current = node.next.as_deref();
+            }
+        }
+    }
+
 }
 
 
@@ -79,21 +91,128 @@ impl ProviderList {
 /// A square matrix implemented as a flat array.
 /// Each row corresponds to a package, and each column corresponds to a package that it depends on.
 /// Optional dependencies are also included in the matrix, but only if they are present in the local database.
-/// TODO: make into a struct with a side length
-type DepMatrix = Vec<bool>;
+struct DepMatrix<'a> {
+    matrix: Vec<bool>,
+    side: usize,
+    index_to_pkg: Vec<&'a Package>,
+    pkg_to_index: HashMap<PkgPtr, PackageIndex>,
+    dep_to_providers: HashMap<DepHash, ProviderList>
+}
 
+impl<'a> DepMatrix<'a> {
 
-fn export_dep_matrix(m: &DepMatrix, side: usize, file_path: &Path) -> io::Result<()> {
-    let mut file = fs::File::create(file_path)?;
-    for row in 0..side {
-        let row_base_index = row*side;
-        for column in 0..side {
-            let needed = m[row_base_index+column];
-            write!(file, "{} ", needed as u8)?
+    pub fn from_alpm_packages(alpm_packages: AlpmList<&'a Package>, db_handle: &alpm::Db) -> Self {
+
+        let pkg_count = alpm_packages.len();
+
+        let mut pkg_to_index = HashMap::with_capacity(pkg_count);
+        // Use this structure for fast iteration
+        let mut index_to_pkg = Vec::with_capacity(pkg_count);
+        // We do not know how many packages are provided by the local packages
+        // TODO: estimate the size empirically based on the number of installed packages?
+        let mut dep_to_providers: HashMap<DepHash, ProviderList>  = HashMap::new();
+
+        for pkg in alpm_packages {
+
+            let index = PackageIndex(index_to_pkg.len());
+            pkg_to_index.insert(PkgPtr::from(pkg), index);
+            index_to_pkg.push(pkg);
+
+            for provided in pkg.provides() {
+                match dep_to_providers.entry(DepHash(provided.name_hash())) {
+                    Entry::Occupied(mut occupied_entry) => {
+                        occupied_entry.get_mut().add_provider(index);
+                        // TODO: suppress this warning in case a virtual package is provided both by a package and its lib32 version (not that simple since some lib32 packages may have different naming)
+                        // eprintln!("Package {} provides {}, which is already provided by package {}. Adding to the list of providers.", pkg.name(), provided.name(), index_to_pkg[occupied_entry.get().head.pkg.0].name());
+                    },
+                    Entry::Vacant(vacant_entry) => {
+                        vacant_entry.insert(ProviderList::new(index));
+                    },
+                }
+            }
         }
-        writeln!(file, "")?;
+
+        let mut matrix = vec![false; pkg_count*pkg_count];
+
+        for (row, pkg) in index_to_pkg.iter().enumerate() {
+
+            let row_base_index = row*pkg_count;
+
+            let hard_deps = pkg.depends();
+            for hard_dep in hard_deps {
+                // TODO: we may want to introduce a cache that maps a dependency name hash to a PackageIndex or &Package
+                // It's not ideal to hash a string every time when we could hash an integer instead. Benchmark this
+                // Also, calling the .pkg() function repeatedly may introduce significant overhead from allocations and checks. See function definition
+                if let Ok(dep_pkg) = db_handle.pkg(hard_dep.name()) {
+                    let column = pkg_to_index.get(&PkgPtr::from(dep_pkg)).unwrap().0;
+                    matrix[row_base_index+column] = true;
+                } else {
+                    let providers = dep_to_providers.get(&DepHash(hard_dep.name_hash())).unwrap();
+                    for provider in providers.iter() {
+                        // TODO: filter providers by version constraints and architecture
+                        let column = provider.0;
+                        matrix[row_base_index+column] = true;
+                    }
+                }
+            }
+
+            let opt_deps = pkg.optdepends();
+            for opt_dep in opt_deps {
+                if let Ok(dep_pkg) = db_handle.pkg(opt_dep.name()) {
+                    let column = pkg_to_index.get(&PkgPtr::from(dep_pkg)).unwrap().0;
+                    matrix[row_base_index+column] = true;
+                } else if let Some(providers) = dep_to_providers.get(&DepHash(opt_dep.name_hash())) {
+                    for provider in providers.iter() {
+                        // TODO: filter providers by version constraints and architecture
+                        let column = provider.0;
+                        matrix[row_base_index+column] = true;
+                    }
+                }
+            }
+        }
+
+        DepMatrix {
+            matrix,
+            side: pkg_count,
+            index_to_pkg,
+            pkg_to_index,
+            dep_to_providers
+        }
     }
-    Ok(())
+
+
+    pub fn export_to_file(&self, file_path: &Path) -> io::Result<()> {
+        let mut file = fs::File::create(file_path)?;
+        for row in 0..self.side {
+            let row_base_index = row*self.side;
+            for column in 0..self.side {
+                let needed = self.matrix[row_base_index+column];
+                write!(file, "{} ", needed as u8)?
+            }
+            writeln!(file, "")?;
+        }
+        Ok(())
+    }
+
+
+    pub fn print_unneeded_naive(&self) {
+        // Find unneeded packages, naive approach (should output the same as `pacman -Qt`)
+        // A package is unneeded if its corresponding column in the matrix is all 0s
+        // Iterate by columns and check one package at a time (bad for cache locality). Stop early if a 1 is reached
+        for col in 0..self.side {
+            let mut needed = false;
+            for row in 0..self.side {
+                if self.matrix[row*self.side+col] {
+                    needed = true;
+                    break;
+                }
+            }
+            if !needed {
+                println!("{}", self.index_to_pkg[col].name());
+            }
+        }
+    }
+
 }
 
 
@@ -111,85 +230,8 @@ fn main() {
 
     let packages = db_handle.pkgs();
 
-    // Create a mapping structure from matrix index to package pointer
-    // Create a mapping structure from package pointer to its matrix index
-    // Create a mapping structure from dependencies to their providers
-    let pkg_count = packages.len();
-    let mut pkg_to_index: HashMap<PkgPtr, PackageIndex> = HashMap::with_capacity(pkg_count);
-    // Use this structure for fast iteration
-    let mut index_to_pkg: Vec<&Package> = Vec::with_capacity(pkg_count);
-    // We do not know how many packages are provided by the local packages
-    // TODO: estimate the size empirically based on the number of installed packages?
-    let mut dep_to_providers: HashMap<DepHash, ProviderList> = HashMap::new();
+    let dep_matrix = DepMatrix::from_alpm_packages(packages, db_handle);
 
-    for pkg in packages {
-
-        let index = PackageIndex(index_to_pkg.len());
-        pkg_to_index.insert(PkgPtr::from(pkg), index);
-        index_to_pkg.push(pkg);
-
-        for provided in pkg.provides() {
-            match dep_to_providers.entry(DepHash(provided.name_hash())) {
-                Entry::Occupied(mut occupied_entry) => {
-                    occupied_entry.get_mut().add_provider(index);
-                    // TODO: suppress this warning in case a virtual package is provided both by a package and its lib32 version (not that simple since some lib32 packages may have different naming)
-                    eprintln!("Package {} provides {}, which is already provided by package {}. Adding to the list of providers.", pkg.name(), provided.name(), index_to_pkg[occupied_entry.get().head.pkg.0].name());
-                },
-                Entry::Vacant(vacant_entry) => {
-                    vacant_entry.insert(ProviderList::new(index));
-                },
-            }
-        }
-    }
-
-    // Build the dependency matrix as a flat array
-    // TODO: consider also checking whether a package depends on a specific version of another package.
-    let mut dep_matrix: DepMatrix = vec![false; pkg_count*pkg_count];
-    for (row, pkg) in index_to_pkg.iter().enumerate() {
-
-        let row_base_index = row*pkg_count;
-
-        let hard_deps = pkg.depends();
-        for hard_dep in hard_deps {
-            // TODO: we may want to introduce a cache that maps a dependency name hash to a PackageIndex or &Package
-            // It's not ideal to hash a string every time when we could hash an integer instead. Benchmark this
-            // Also, calling the .pkg() function repeatedly may introduce significant overhead from allocations and checks. See function definition
-            let name = hard_dep.name();
-
-            let dep_pkg =
-                db_handle.pkg(name)
-                .unwrap_or_else(|_| {
-                    // If the dependency is not present in the local database, assume it is a virtual package and get its provider
-                    dep_to_providers.get(&DepHash(hard_dep.name_hash()))
-                        .map(|provider_list| {
-                            // TODO: filter providers by version constraints and architecture
-                            let provider_index = provider_list.head.pkg;
-                            index_to_pkg[provider_index.0]
-                        }).unwrap()
-                });
-
-            let column = pkg_to_index.get(&PkgPtr::from(dep_pkg)).unwrap().0;
-            dep_matrix[row_base_index+column] = true;
-        }
-
-        let opt_deps = pkg.optdepends();
-        for opt_dep in opt_deps {
-            if let Some(dep_pkg) =
-                db_handle.pkg(opt_dep.name()).ok()
-                .or_else(|| dep_to_providers.get(&DepHash(opt_dep.name_hash()))
-                                .map(|provider_list| {
-                                    // TODO: filter providers by version constraints and architecture
-                                    let provider_index = provider_list.head.pkg;
-                                    index_to_pkg[provider_index.0]
-                                })
-                )
-            {
-                let column = pkg_to_index.get(&PkgPtr::from(dep_pkg)).unwrap().0;
-                dep_matrix[row_base_index+column] = true;
-            }
-        }
-    }
-
-    // export_dep_matrix(&dep_matrix, pkg_count, Path::new("dep_matrix")).unwrap();
+    dep_matrix.print_unneeded_naive();
 
 }
