@@ -2,7 +2,7 @@
 
 use std::{collections::{HashMap, hash_map::Entry}, fs, io::{self, Write}, path::Path};
 
-use alpm::{Alpm, AlpmList, Package};
+use alpm::{Alpm, AlpmList, Package, PackageReason};
 
 
 const FS_ROOT: &str = "/";
@@ -88,7 +88,7 @@ impl ProviderList {
 
 
 
-/// A square matrix implemented as a flat array.
+/// A dense square matrix implemented as a flat array.
 /// Each row corresponds to a package, and each column corresponds to a package that it depends on.
 /// Optional dependencies are also included in the matrix, but only if they are present in the local database.
 struct DepMatrix<'a> {
@@ -195,7 +195,7 @@ impl<'a> DepMatrix<'a> {
     }
 
 
-    pub fn print_unneeded_naive(&self) {
+    pub fn print_unneeded_naive_by_columns(&self) {
         // Find unneeded packages, naive approach (should output the same as `pacman -Qt`)
         // A package is unneeded if its corresponding column in the matrix is all 0s
         // Iterate by columns and check one package at a time (bad for cache locality). Stop early if a 1 is reached
@@ -211,6 +211,184 @@ impl<'a> DepMatrix<'a> {
                 println!("{}", self.index_to_pkg[col].name());
             }
         }
+    }
+
+
+    pub fn print_unneeded_naive_by_rows(&self) {
+        // Find unneeded packages, optimized approach (should output the same as `pacman -Qt`)
+        // A package is unneeded if its corresponding column in the matrix is all 0s
+        // Iterate by rows and check all packages at once (better for cache locality)
+        let mut needed = vec![false; self.side];
+        for row in 0..self.side {
+            let row_base_index = row*self.side;
+            for col in 0..self.side {
+                if self.matrix[row_base_index+col] {
+                    needed[col] = true;
+                }
+            }
+        }
+        for col in 0..self.side {
+            if !needed[col] {
+                println!("{}", self.index_to_pkg[col].name());
+            }
+        }
+    }
+
+
+    pub fn print_all_dependencies_dfs(&self, package: &Package) {
+        // Print all depencencies of the given package.
+        let mut visited = vec![false; self.side];
+        let mut stack = vec![self.pkg_to_index[&PkgPtr::from(package)]];
+
+        while let Some(pkg_index) = stack.pop() {
+            if visited[pkg_index.0] {
+                continue;
+            }
+            visited[pkg_index.0] = true;
+
+            let pkg = self.index_to_pkg[pkg_index.0];
+            println!("{}", pkg.name());
+
+            // Iterate over the row corresponding to the current package and push all packages that it depends on onto the stack
+            let row_base_index = pkg_index.0*self.side;
+            for col in 0..self.side {
+                if self.matrix[row_base_index+col] {
+                    stack.push(PackageIndex(col));
+                }
+            }
+        }
+    }
+
+
+    pub fn print_all_dependents_dfs(&self, package: &Package) {
+        // Print all packages that depend on the given package.
+        let mut visited = vec![false; self.side];
+        let mut stack = vec![self.pkg_to_index[&PkgPtr::from(package)]];
+
+        while let Some(pkg_index) = stack.pop() {
+            if visited[pkg_index.0] {
+                continue;
+            }
+            visited[pkg_index.0] = true;
+
+            let pkg = self.index_to_pkg[pkg_index.0];
+            println!("{}", pkg.name());
+
+            // Iterate over the column corresponding to the current package and push all packages that depend on it onto the stack
+            for row in 0..self.side {
+                if self.matrix[row*self.side+pkg_index.0] {
+                    stack.push(PackageIndex(row));
+                }
+            }
+        }
+    }
+
+
+    pub fn is_needed_by_explicit_dfs(&self, package: &Package) -> bool {
+        // Check if the given package is either explicitly installed or needed by an explicitly installed package.
+
+        // Short circuit for packages that are explicitly installed
+        if matches!(package.reason(), PackageReason::Explicit) {
+            return true;
+        }
+
+        let mut visited = vec![false; self.side];
+        let mut stack = vec![self.pkg_to_index[&PkgPtr::from(package)]];
+
+        while let Some(pkg_index) = stack.pop() {
+            if visited[pkg_index.0] {
+                continue;
+            }
+            visited[pkg_index.0] = true;
+
+            // let pkg = self.index_to_pkg[pkg_index.0];
+            // println!("Checking non-explicit {}", pkg.name());
+
+            // Iterate over the column corresponding to the current package and push all packages that depend on it onto the stack
+            for dependent_index in 0..self.side {
+                // Only check dependents that have not been visited yet
+                if self.matrix[dependent_index*self.side+pkg_index.0] && !visited[dependent_index] {
+                    let dependent = self.index_to_pkg[dependent_index];
+                    // println!("\tFound dependent {}", dependent.name());
+                    match dependent.reason() {
+                        // Short circuit if the dependent is explicitly installed
+                        PackageReason::Explicit => {
+                            // println!("\tFound explicit dependent {}", dependent.name());
+                            return true;
+                        },
+                        PackageReason::Depend => {
+                            if !visited[dependent_index] {
+                                // println!("\tPushing dependent {}", dependent.name());
+                                stack.push(PackageIndex(dependent_index));
+                            }
+                        },
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+
+    pub fn compute_unneeded_packages_dfs(&self) {
+        // Should include all output from `pacman -Qdt`, plus non-explicit circular dependencies
+        // Iterate over all explicitly installed packages.
+        // Mark all their dependencies as needed by visiting them using DFS.
+        // Unvisited nodes are therefore not needed by any explicitly installed pakcage.
+        let mut visited: Vec<bool> = vec![false; self.side];
+        let mut stack: Vec<PackageIndex> = Vec::new();
+
+        for &package in &self.index_to_pkg {
+            let pkg_index = self.pkg_to_index[&PkgPtr::from(package)];
+
+            // Skip already visited packages (we already know they are needed) and non-explicit packages
+            if visited[pkg_index.0] || matches!(package.reason(), PackageReason::Depend) {
+                continue;
+            }
+            // In this branch, the package is explicitly installed and not visited yet
+            visited[pkg_index.0] = true;
+
+            // Push its dependencies onto the stack for DFS
+            let row_base_index = pkg_index.0*self.side;
+            for col in 0..self.side {
+                // Only push dependencies that have not been visited yet
+                if self.matrix[row_base_index+col] && !visited[col] {
+                    stack.push(PackageIndex(col));
+                }
+            }
+            while let Some(pkg_index) = stack.pop() {
+                if visited[pkg_index.0] {
+                    continue;
+                }
+                visited[pkg_index.0] = true;
+
+                // Iterate over the row corresponding to the current package and push all packages that it depends on onto the stack
+                let row_base_index = pkg_index.0*self.side;
+                for col in 0..self.side {
+                    if self.matrix[row_base_index+col] && !visited[col] {
+                        stack.push(PackageIndex(col));
+                    }
+                }
+            }
+        }
+
+        // Print all unneeded packages
+        for (index, package) in self.index_to_pkg.iter().enumerate() {
+            if !visited[index] {
+                println!("{}", package.name());
+            }
+        }
+    }
+
+
+    pub fn count_edges(&self) -> usize {
+        self.matrix.iter().filter(|&&x| x).count()
+    }
+
+
+    pub fn total_size(&self) -> usize {
+        self.side*self.side
     }
 
 }
@@ -232,6 +410,8 @@ fn main() {
 
     let dep_matrix = DepMatrix::from_alpm_packages(packages, db_handle);
 
-    dep_matrix.print_unneeded_naive();
+    let edges = dep_matrix.count_edges();
+    println!("Edges: {} / Total: {} / Density: {:.2}%", edges, dep_matrix.total_size(), edges as f64 / dep_matrix.total_size() as f64 * 100_f64);
 
+    // dep_matrix.compute_unneeded_packages_dfs();
 }

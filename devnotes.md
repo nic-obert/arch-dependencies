@@ -38,3 +38,12 @@ TODO: Consider using specialized integer hash functions for improved hash speeds
 Potential limitation: if both packages A and B provide a virtual package C and a package D depends on C, then D may be listed as depending on both A and B instead of depending on only one of them. In some cases, it's best to leave it be. For instance, both vulkan-intel and nvidia-utils provide a vulkan-driver virtual package. We don't want to remove one of them because different graphics processors on the same system may use different drivers.
 
 TODO: Consider parallelizing some work with rayon
+
+Consider also implementing this program using a sparse adjacency matrix and benchmark performance
+
+Alternative approach:
+Start from a list of all explicitly installed packages.
+For each of these packages, mark all their dependencies as needed using something like DFS.
+Short-circuit for already-visited packages (because their dependencies have already been marked as needed).
+So... visited == needed because we are only visiting nodes of the graph that stem from explicitly needed nodes.
+The unneeded nodes are all and only those left unvisited.
