@@ -96,7 +96,6 @@ struct DepMatrix<'a> {
     side: usize,
     index_to_pkg: Vec<&'a Package>,
     pkg_to_index: HashMap<PkgPtr, PackageIndex>,
-    dep_to_providers: HashMap<DepHash, ProviderList>
 }
 
 impl<'a> DepMatrix<'a> {
@@ -138,8 +137,8 @@ impl<'a> DepMatrix<'a> {
 
             let row_base_index = row*pkg_count;
 
-            let hard_deps = pkg.depends();
-            for hard_dep in hard_deps {
+            for hard_dep in pkg.depends() {
+                // First check if there is a real package that satisfies this requirement. If not, expect the dependency to be provided as a virtual package
                 // TODO: we may want to introduce a cache that maps a dependency name hash to a PackageIndex or &Package
                 // It's not ideal to hash a string every time when we could hash an integer instead. Benchmark this
                 // Also, calling the .pkg() function repeatedly may introduce significant overhead from allocations and checks. See function definition
@@ -148,6 +147,12 @@ impl<'a> DepMatrix<'a> {
                     matrix[row_base_index+column] = true;
                 } else {
                     let providers = dep_to_providers.get(&DepHash(hard_dep.name_hash())).unwrap();
+
+                    // Debug:
+                    // if providers.iter().count() > 1 {
+                    //     println!("Hard dependency `{}` has multiple providers: {:?}", hard_dep.name(), providers.iter().map(|p| index_to_pkg[p.0].name()).collect::<Vec<_>>());
+                    // }
+
                     for provider in providers.iter() {
                         // TODO: filter providers by version constraints and architecture
                         let column = provider.0;
@@ -156,12 +161,18 @@ impl<'a> DepMatrix<'a> {
                 }
             }
 
-            let opt_deps = pkg.optdepends();
-            for opt_dep in opt_deps {
+            for opt_dep in pkg.optdepends() {
+                // First check if there is a real package that satisfies this requirement. If not, check if the dependency is provided as a virtual package
                 if let Ok(dep_pkg) = db_handle.pkg(opt_dep.name()) {
                     let column = pkg_to_index.get(&PkgPtr::from(dep_pkg)).unwrap().0;
                     matrix[row_base_index+column] = true;
                 } else if let Some(providers) = dep_to_providers.get(&DepHash(opt_dep.name_hash())) {
+
+                    // Debug:
+                    // if providers.iter().count() > 1 {
+                    //     println!("Optional dependency `{}` has multiple providers: {:?}", opt_dep.name(), providers.iter().map(|p| index_to_pkg[p.0].name()).collect::<Vec<_>>());
+                    // }
+
                     for provider in providers.iter() {
                         // TODO: filter providers by version constraints and architecture
                         let column = provider.0;
@@ -176,7 +187,6 @@ impl<'a> DepMatrix<'a> {
             side: pkg_count,
             index_to_pkg,
             pkg_to_index,
-            dep_to_providers
         }
     }
 
@@ -413,5 +423,5 @@ fn main() {
     let edges = dep_matrix.count_edges();
     println!("Edges: {} / Total: {} / Density: {:.2}%", edges, dep_matrix.total_size(), edges as f64 / dep_matrix.total_size() as f64 * 100_f64);
 
-    // dep_matrix.compute_unneeded_packages_dfs();
+    dep_matrix.compute_unneeded_packages_dfs();
 }
