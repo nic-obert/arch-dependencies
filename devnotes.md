@@ -47,3 +47,9 @@ For each of these packages, mark all their dependencies as needed using somethin
 Short-circuit for already-visited packages (because their dependencies have already been marked as needed).
 So... visited == needed because we are only visiting nodes of the graph that stem from explicitly needed nodes.
 The unneeded nodes are all and only those left unvisited.
+
+
+## TODO: Create a testing framework
+Design a system that builds realistic dependency matrices (or any other fitting representation) and test the algorithm against them.
+This system may automatically generate pseudo-random dep graphs or allow the user to input hand-made graphs.
+
