@@ -1,4 +1,27 @@
-use alpm::Package;
+use alpm::{Alpm, AlpmList, Db, Package};
+
+
+const FS_ROOT: &str = "/";
+const DB_PATH: &str = "/var/lib/pacman";
+
+
+pub fn init_alpm() -> Alpm {
+    Alpm::new(FS_ROOT, DB_PATH).unwrap_or_else(
+        |e| panic!("Failed to initialize ALPM: {}", e)
+    )
+}
+
+
+pub fn get_packages(alpm_handle: &Alpm) -> (&'_ Db, AlpmList<'_, &Package>) {
+
+    let db_handle = alpm_handle.localdb();
+
+    if let Err(e) = db_handle.is_valid() {
+        panic!("Error checking database validity: {}", e);
+    }
+
+    (db_handle, db_handle.pkgs())
+}
 
 
 /// Wraps a package pointer
