@@ -53,3 +53,10 @@ The unneeded nodes are all and only those left unvisited.
 Design a system that builds realistic dependency matrices (or any other fitting representation) and test the algorithm against them.
 This system may automatically generate pseudo-random dep graphs or allow the user to input hand-made graphs.
 
+
+## Optimization notes
+
+Db::pkg() really takes up a significant portion of runtime (~5%)
+
+As of now, building the dep matrix is quite expensive
+

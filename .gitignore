@@ -1,2 +1,4 @@
 /target
 untracked
+*.svg
+perf.data*

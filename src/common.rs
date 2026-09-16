@@ -25,7 +25,7 @@ pub fn get_packages(alpm_handle: &Alpm) -> (&'_ Db, AlpmList<'_, &Package>) {
 
 
 /// Wraps a package pointer
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PkgPtr(pub *const Package);
 
 impl From<&Package> for PkgPtr {
@@ -47,7 +47,7 @@ pub struct DepHash(pub u64);
 
 
 /// Index of a package in the dependency matrix
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct PackageIndex(pub usize);
 
 

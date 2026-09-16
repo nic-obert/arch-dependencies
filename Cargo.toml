@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 alpm = "5.0.2"
+
+[profile.release]
+debug = true
