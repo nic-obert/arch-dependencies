@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use alpm::{Alpm, AlpmList, Db, Package};
 
 
@@ -44,6 +46,18 @@ impl Into<&Package> for PkgPtr {
 /// Hash of the name of a dependency, used for mapping dependencies to their providers
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DepHash(pub u64);
+
+
+/// Hash of the name of a dependency, used for mapping dependencies to their providers
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DepHashOpt(pub u64);
+
+impl Hash for DepHashOpt {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // No need to hash an already random integer
+        state.write_u64(self.0);
+    }
+}
 
 
 /// Index of a package in the dependency matrix
