@@ -1,7 +1,8 @@
 # Dependency Graph Analyzer
 
 This program analyzes the dependency graph of all locally installed packages to determine which packages are currently not needed (and can be safely removed).
-This program is able to detect unneeded circular dependencies, which `pacman -Qdt` cannot detect.
+
+This program is able to detect unneeded circular dependencies, which `pacman -Qdt` cannot detect, while being significantly faster.
 
 A package is determined to be needed if any of the following conditions are met:
 * the package is marked as explicitly installed
