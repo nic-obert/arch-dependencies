@@ -14,15 +14,15 @@ pub fn init_alpm() -> Alpm {
 }
 
 
-pub fn get_packages(alpm_handle: &Alpm) -> (&'_ Db, AlpmList<'_, &Package>) {
+pub fn get_packages(alpm: &Alpm) -> (&'_ Db, AlpmList<'_, &Package>) {
 
-    let db_handle = alpm_handle.localdb();
+    let db = alpm.localdb();
 
-    if let Err(e) = db_handle.is_valid() {
+    if let Err(e) = db.is_valid() {
         panic!("Error checking database validity: {}", e);
     }
 
-    (db_handle, db_handle.pkgs())
+    (db, db.pkgs())
 }
 
 

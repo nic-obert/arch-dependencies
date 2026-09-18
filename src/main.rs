@@ -9,15 +9,22 @@ use crate::{common::{get_packages, init_alpm}, dep_matrix::print_unneeded_no_mat
 
 fn main() {
 
-    let alpm = init_alpm();
-    let (db, packages) = get_packages(&alpm);
+    let argv = std::env::args_os();
+    if argv.len() > 1 {
+        println!("
+Depencency graph analyzer - help page
 
-    print_unneeded_no_matrix(db, packages);
+Run this program without arguments
 
-    // let dep_matrix = dep_matrix::DepMatrix::from_alpm_packages_no_dep_cache(packages, db_handle);
+This program lists all locally installed packages that are not needed, and can be safely removed.
+A package is unneeded if it was installed as a dependency and it's not (optionally) required, directly or indirectly, by any other needed package.
 
-    // let edges = dep_matrix.count_edges();
-    // println!("Edges: {} / Total: {} / Density: {:.2}%", edges, dep_matrix.total_size(), edges as f64 / dep_matrix.total_size() as f64 * 100_f64);
-
-    // dep_matrix.print_unneeded();
+Note: some packages may depend on virtual packages, which may have multiple providers. If the virtual package name is found to be needed, this program will treat all its providers as needed.
+");
+    } else {
+        let alpm = init_alpm();
+        let (db, packages) = get_packages(&alpm);
+    
+        print_unneeded_no_matrix(db, packages);
+    }
 }
