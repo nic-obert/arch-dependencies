@@ -371,6 +371,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
                 Some(*occupied_entry.get())
             },
             Entry::Vacant(vacant_entry) => {
+                // TODO: Here we convert a C const char* into a Rust &str only to copy it into a CString and convert it back to a C const char*
+                // We should avoid all these useless conversions at the language boundary
                 if let Ok(pkg) = db.pkg(hard_dep.name()) {
                     let pkg_ptr = PkgPtr::from(pkg);
                     let pkg_index = *pkg_to_index.get(&pkg_ptr).unwrap();
