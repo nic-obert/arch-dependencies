@@ -57,13 +57,13 @@ pub struct PackageIndex(pub usize);
 /// Most virtual packages only have one provider (on my system, there are 834 virtual packages and only about 90 have more than one provider)
 /// Still, we cannot assume a strict maximum number of providers and we should not over-allocate for a worst-case scenario.
 struct ProviderNode {
+    pub next: Option<Box<ProviderNode>>,
     pub pkg: PackageIndex,
-    pub next: Option<Box<ProviderNode>>
 }
 
 
 /// A singly-linked list of provider nodes.
-/// There is always at least one provider.
+/// There is always at least one provider and usually only one or two.
 pub struct ProviderList {
     head: ProviderNode,
 }
