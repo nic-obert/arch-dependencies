@@ -1,12 +1,12 @@
 use std::collections::hash_map::Entry;
 
-use alpm::{AlpmList, Db, Package, PackageReason};
+use alpm::{AlpmList, Db, Dep, Package, PackageReason};
 use rustc_hash::FxHashMap;
 
 use crate::common::{DepHash, PackageIndex, PkgPtr, ProviderList};
 
 
-pub fn print_unneeded_fxhash(db: &Db, alpm_packages: AlpmList<&Package>) {
+pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
     
     let pkg_count = alpm_packages.len();
 
@@ -41,33 +41,29 @@ pub fn print_unneeded_fxhash(db: &Db, alpm_packages: AlpmList<&Package>) {
         }
     }
 
-    let mut visited: Vec<bool> = vec![false; pkg_count];
+    let mut discovered: Vec<bool> = vec![false; pkg_count];
     let mut stack: Vec<PackageIndex> = Vec::new();
 
     for (pkg_index, &pkg) in index_to_pkg.iter().enumerate() {
 
         // Skip already visited packages (we already know they are needed) and non-explicit packages
-        if visited[pkg_index] || matches!(pkg.reason(), PackageReason::Depend) {
+        if discovered[pkg_index] || matches!(pkg.reason(), PackageReason::Depend) {
             continue;
         }
         // In this branch, the package is explicitly installed and not visited yet
-        visited[pkg_index] = true;
+        discovered[pkg_index] = true;
 
         // Push its dependencies onto the stack for DFS
-        push_dependencies_fxhash(db, &pkg_to_index, &dep_to_providers, &mut dep_hash_to_pkg, &visited, &mut stack, pkg);
+        push_dependencies(db, &pkg_to_index, &dep_to_providers, &mut dep_hash_to_pkg, &mut discovered, &mut stack, pkg);
         
         while let Some(pkg_index) = stack.pop() {
-            if visited[pkg_index.0] {
-                continue;
-            }
-            visited[pkg_index.0] = true;
-
-            push_dependencies_fxhash(db, &pkg_to_index, &dep_to_providers, &mut dep_hash_to_pkg, &visited, &mut stack, index_to_pkg[pkg_index.0]);
+            push_dependencies(db, &pkg_to_index, &dep_to_providers, &mut dep_hash_to_pkg, &mut discovered, &mut stack, index_to_pkg[pkg_index.0]);
         }
     }
 
+    // Disable printing when performing benchmarks and tests
     if !cfg!(test) {
-        for (pkg_index, visited) in visited.into_iter().enumerate() {
+        for (pkg_index, visited) in discovered.into_iter().enumerate() {
             if !visited {
                 let pkg = index_to_pkg[pkg_index];
                 println!("{}", pkg.name());
@@ -77,7 +73,26 @@ pub fn print_unneeded_fxhash(db: &Db, alpm_packages: AlpmList<&Package>) {
 }
 
 
-fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageIndex>, dep_to_providers: &FxHashMap<DepHash, ProviderList>, dep_hash_to_pkg: &mut FxHashMap<DepHash, PackageIndex>, visited: &[bool], stack: &mut Vec<PackageIndex>, pkg: &Package) {
+/// This function was written by stitching together lower-level operations done in the libalpm Rust bindings.
+/// The goal was to avoid unnecessary reallocations and checks when looking up a package by name
+fn get_pkg_from_dep<'a>(db: &'a Db, dep: &Dep) -> alpm::Result<&'a Package> {
+
+    use alpm_sys::{alpm_depend_t, alpm_db_get_pkg, alpm_errno_t, alpm_errno, alpm_db_get_handle};
+
+    unsafe {
+        let name = (*std::mem::transmute::<&Dep, *const alpm_depend_t>(dep)).name;
+        let pkg = alpm_db_get_pkg(db.as_ptr(), name);
+
+        if pkg.is_null() {
+            Err(std::mem::transmute::<alpm_errno_t, alpm::Error>(alpm_errno(alpm_db_get_handle(db.as_ptr()))))
+        } else {
+            Ok(&*(pkg as *mut Package))
+        }
+    }
+}
+
+
+fn push_dependencies(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageIndex>, dep_to_providers: &FxHashMap<DepHash, ProviderList>, dep_hash_to_pkg: &mut FxHashMap<DepHash, PackageIndex>, discovered: &mut [bool], stack: &mut Vec<PackageIndex>, pkg: &Package) {
     
     for hard_dep in pkg.depends() {
         // First check if there is a real package that satisfies this requirement. If not, expect the dependency to be provided as a virtual package
@@ -86,11 +101,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
                 Some(*occupied_entry.get())
             },
             Entry::Vacant(vacant_entry) => {
-                // TODO: Here we convert a C const char* into a Rust &str only to copy it into a CString and convert it back to a C const char*
-                // We should avoid all these useless conversions at the language boundary
-                if let Ok(pkg) = db.pkg(hard_dep.name()) {
-                    let pkg_ptr = PkgPtr::from(pkg);
-                    let pkg_index = *pkg_to_index.get(&pkg_ptr).unwrap();
+                if let Ok(pkg) = get_pkg_from_dep(db, hard_dep) {
+                    let pkg_index = *pkg_to_index.get(&PkgPtr::from(pkg)).unwrap();
                     vacant_entry.insert(pkg_index);
                     Some(pkg_index)
                 } else {
@@ -98,7 +110,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
                 }
             },
         } {
-            if !visited[dep_pkg_index.0] {
+            if !discovered[dep_pkg_index.0] {
+                discovered[dep_pkg_index.0] = true;
                 stack.push(dep_pkg_index);
             }
         } else {
@@ -111,7 +124,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
 
             for provider in providers.iter() {
                 // TODO: filter providers by version constraints and architecture
-                if !visited[provider.0] {
+                if !discovered[provider.0] {
+                    discovered[provider.0] = true;
                     stack.push(*provider);
                 }
             }
@@ -125,9 +139,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
                 Some(*occupied_entry.get())
             },
             Entry::Vacant(vacant_entry) => {
-                if let Ok(pkg) = db.pkg(opt_dep.name()) {
-                    let pkg_ptr = PkgPtr::from(pkg);
-                    let pkg_index = *pkg_to_index.get(&pkg_ptr).unwrap();
+                if let Ok(pkg) = get_pkg_from_dep(db, opt_dep) {
+                    let pkg_index = *pkg_to_index.get(&PkgPtr::from(pkg)).unwrap();
                     vacant_entry.insert(pkg_index);
                     Some(pkg_index)
                 } else {
@@ -135,7 +148,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
                 }
             },
         } {
-            if !visited[dep_pkg_index.0] {
+            if !discovered[dep_pkg_index.0] {
+                discovered[dep_pkg_index.0] = true;
                 stack.push(dep_pkg_index);
             }           
         } else if let Some(providers) = dep_to_providers.get(&DepHash(opt_dep.name_hash())) {
@@ -147,7 +161,8 @@ fn push_dependencies_fxhash(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageInd
 
             for provider in providers.iter() {
                 // TODO: filter providers by version constraints and architecture
-                if !visited[provider.0] {
+                if !discovered[provider.0] {
+                    discovered[provider.0] = true;
                     stack.push(*provider);
                 }
             }
@@ -166,11 +181,11 @@ mod tests {
 
 
     #[bench]
-    fn b_unneeded_fxhash(b: &mut Bencher) {
+    fn b_unneeded(b: &mut Bencher) {
         let alpm = init_alpm();
         let (db, packages) = get_packages(&alpm);
         b.iter(|| {
-            print_unneeded_fxhash(db, packages)
+            print_unneeded(db, packages)
         })
     }
 

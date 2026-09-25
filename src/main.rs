@@ -4,7 +4,7 @@ mod dep_analyzer;
 mod common;
 
 
-use crate::{common::{get_packages, init_alpm}, dep_analyzer::print_unneeded_fxhash};
+use crate::common::{get_packages, init_alpm};
 
 
 fn main() {
@@ -25,6 +25,6 @@ Note: some packages may depend on virtual packages, which may have multiple prov
         let alpm = init_alpm();
         let (db, packages) = get_packages(&alpm);
     
-        print_unneeded_fxhash(db, packages);
+        dep_analyzer::print_unneeded(db, packages);
     }
 }

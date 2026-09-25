@@ -64,6 +64,7 @@ struct ProviderNode {
 
 /// A singly-linked list of provider nodes.
 /// There is always at least one provider and usually only one or two.
+/// This structure does not allocate on the heap if only one node is present.
 pub struct ProviderList {
     head: ProviderNode,
 }
