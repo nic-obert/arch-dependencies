@@ -1,16 +1,16 @@
-use std::collections::hash_map::Entry;
+use std::{collections::hash_map::Entry, io::Write};
 
 use alpm::{AlpmList, Db, Dep, Package, PackageReason};
 use rustc_hash::FxHashMap;
 
-use crate::common::{DepHash, PackageIndex, PkgPtr, ProviderList};
+use crate::common::{DepHash, PkgIndex, PkgPtr, ProviderList};
 
 
 pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
     
     let pkg_count = alpm_packages.len();
 
-    let mut pkg_to_index: FxHashMap<PkgPtr, PackageIndex> = FxHashMap::default();
+    let mut pkg_to_index: FxHashMap<PkgPtr, PkgIndex> = FxHashMap::default();
     pkg_to_index.reserve(pkg_count);
     // Use this structure for fast iteration
     let mut index_to_pkg: Vec<&Package> = Vec::with_capacity(pkg_count);
@@ -18,12 +18,12 @@ pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
     // TODO: estimate the size empirically based on the number of installed packages?
     let mut dep_to_providers: FxHashMap<DepHash, ProviderList>  = FxHashMap::default();
     // Pre-allocate the HashMap with a capacity chosen through empirical tests
-    let mut dep_hash_to_pkg: FxHashMap<DepHash, PackageIndex> = FxHashMap::default();
+    let mut dep_hash_to_pkg: FxHashMap<DepHash, PkgIndex> = FxHashMap::default();
     dep_hash_to_pkg.reserve(pkg_count);
 
     for pkg in alpm_packages {
 
-        let index = PackageIndex(index_to_pkg.len());
+        let index = PkgIndex(index_to_pkg.len());
         pkg_to_index.insert(PkgPtr::from(pkg), index);
         index_to_pkg.push(pkg);
 
@@ -31,8 +31,7 @@ pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
             match dep_to_providers.entry(DepHash(provided.name_hash())) {
                 Entry::Occupied(mut occupied_entry) => {
                     occupied_entry.get_mut().add_provider(index);
-                    // TODO: suppress this warning in case a virtual package is provided both by a package and its lib32 version (not that simple since some lib32 packages may have different naming)
-                    // eprintln!("Package {} provides {}, which is already provided by package {}. Adding to the list of providers.", pkg.name(), provided.name(), index_to_pkg[occupied_entry.get().iter().next().unwrap().0].name());
+                    eprintln!("Package {} provides {}, which is already provided by package {}. Is it intentional?.", pkg.name(), provided.name(), index_to_pkg[occupied_entry.get().first().0].name());
                 },
                 Entry::Vacant(vacant_entry) => {
                     vacant_entry.insert(ProviderList::new(index));
@@ -42,7 +41,7 @@ pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
     }
 
     let mut discovered: Vec<bool> = vec![false; pkg_count];
-    let mut stack: Vec<PackageIndex> = Vec::new();
+    let mut stack: Vec<PkgIndex> = Vec::new();
 
     for (pkg_index, &pkg) in index_to_pkg.iter().enumerate() {
 
@@ -63,10 +62,11 @@ pub fn print_unneeded(db: &Db, alpm_packages: AlpmList<&Package>) {
 
     // Disable printing when performing benchmarks and tests
     if !cfg!(test) {
+        let mut stdout = std::io::stdout().lock();
         for (pkg_index, visited) in discovered.into_iter().enumerate() {
             if !visited {
                 let pkg = index_to_pkg[pkg_index];
-                println!("{}", pkg.name());
+                writeln!(stdout, "{}", pkg.name()).unwrap();
             }
         }
     }
@@ -92,7 +92,7 @@ fn get_pkg_from_dep<'a>(db: &'a Db, dep: &Dep) -> alpm::Result<&'a Package> {
 }
 
 
-fn push_dependencies(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageIndex>, dep_to_providers: &FxHashMap<DepHash, ProviderList>, dep_hash_to_pkg: &mut FxHashMap<DepHash, PackageIndex>, discovered: &mut [bool], stack: &mut Vec<PackageIndex>, pkg: &Package) {
+fn push_dependencies(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PkgIndex>, dep_to_providers: &FxHashMap<DepHash, ProviderList>, dep_hash_to_pkg: &mut FxHashMap<DepHash, PkgIndex>, discovered: &mut [bool], stack: &mut Vec<PkgIndex>, pkg: &Package) {
     
     for hard_dep in pkg.depends() {
         // First check if there is a real package that satisfies this requirement. If not, expect the dependency to be provided as a virtual package
@@ -117,13 +117,7 @@ fn push_dependencies(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageIndex>, de
         } else {
             let providers = dep_to_providers.get(&DepHash(hard_dep.name_hash())).unwrap();
 
-            // Debug:
-            // if providers.iter().count() > 1 {
-            //     println!("Hard dependency `{}` has multiple providers: {:?}", hard_dep.name(), providers.iter().count());
-            // }
-
             for provider in providers.iter() {
-                // TODO: filter providers by version constraints and architecture
                 if !discovered[provider.0] {
                     discovered[provider.0] = true;
                     stack.push(*provider);
@@ -154,13 +148,7 @@ fn push_dependencies(db: &Db, pkg_to_index: &FxHashMap<PkgPtr, PackageIndex>, de
             }           
         } else if let Some(providers) = dep_to_providers.get(&DepHash(opt_dep.name_hash())) {
 
-            // Debug:
-            // if providers.iter().count() > 1 {
-            //     println!("Optional dependency `{}` has multiple providers: {:?}", opt_dep.name(), providers.iter().count());
-            // }
-
             for provider in providers.iter() {
-                // TODO: filter providers by version constraints and architecture
                 if !discovered[provider.0] {
                     discovered[provider.0] = true;
                     stack.push(*provider);

@@ -50,7 +50,7 @@ pub struct DepHash(pub u64);
 
 /// Index of a package in the dependency matrix
 #[derive(Debug, Clone, Copy)]
-pub struct PackageIndex(pub usize);
+pub struct PkgIndex(pub usize);
 
 
 /// A node in a linked list of virtual package providers.
@@ -58,7 +58,7 @@ pub struct PackageIndex(pub usize);
 /// Still, we cannot assume a strict maximum number of providers and we should not over-allocate for a worst-case scenario.
 struct ProviderNode {
     pub next: Option<Box<ProviderNode>>,
-    pub pkg: PackageIndex,
+    pub pkg: PkgIndex,
 }
 
 
@@ -71,7 +71,7 @@ pub struct ProviderList {
 
 impl ProviderList {
 
-    pub fn new(pkg: PackageIndex) -> Self {
+    pub fn new(pkg: PkgIndex) -> Self {
         ProviderList {
             head: ProviderNode {
                 pkg,
@@ -80,7 +80,11 @@ impl ProviderList {
         }
     }
 
-    pub fn add_provider(&mut self, pkg: PackageIndex) {
+    pub fn first(&self) -> PkgIndex {
+        self.head.pkg
+    }
+
+    pub fn add_provider(&mut self, pkg: PkgIndex) {
         // Traverse the list instead of storing a tail pointer, since the number of providers is usually just one or two and we want to avoid over-allocating memory for a tail pointer.
         let mut current = &mut self.head;
         while let Some(ref mut next_node) = current.next {
@@ -92,7 +96,7 @@ impl ProviderList {
         }));
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &PackageIndex> {
+    pub fn iter(&self) -> impl Iterator<Item = &PkgIndex> {
         gen {
             let mut current = Some(&self.head);
             while let Some(node) = current {
