@@ -8,7 +8,9 @@ A package is determined to be needed if any of the following conditions are met:
 * the package is marked as explicitly installed
 * the package is (optionally) required by a needed package
 
-Any package that is not marked as needed, is treated as unneeded.
+Any package that is not marked as needed, is treated as unneeded and printed to stdout.
+
+The program also warns about virtual packages with multiple providers. Having multiple providers can be intentional. For instance, on systems with multiple GPUs, both `vulkan-intel` and `vulkan-nouveau` provide the virtual package `vulkan-driver`, and it's the Vulkan loader's job to choose which driver is most appropriate. In other circumstances, you may want only one provider for each virtual package. It's up to the system maintainer to determine which providers to keep.
 
 > Note 1: optional dependencies are treated as regular dependencies. This means that, let `A` be a needed package, if `A` optionally depends on `B`, `B` is also marked as needed. This behavior is intended, as you don't want to accidentally remove optional functionality users may rely on. It's up to the system maintainer to choose whether an optional dependency is really needed.
 
